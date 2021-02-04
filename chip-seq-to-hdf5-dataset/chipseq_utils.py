@@ -18,6 +18,7 @@ import urllib.request
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.stats
 
 # Type that can represent a path on the filesystem.
 PathType = typing.Union[str, Path]
@@ -419,7 +420,9 @@ def bedtools_intersect(
             args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         if not process.stdout:
-            raise subprocess.SubprocessError("empty stdout, aborting.")
+            raise subprocess.SubprocessError(
+                f"empty stdout, aborting. stderr is {process.stderr.decode()}"
+            )
         with openfile(output_bedfile, mode="wb") as f:  # type: ignore
             f.write(process.stdout)
         return process
@@ -431,6 +434,48 @@ def _is_gzipped(filepath: PathType) -> bool:
     """Return `True` if the file is gzip-compressed."""
     with open(filepath, "rb") as f:
         return f.read(2) == b"\x1f\x8b"
+
+
+def sample_b_matched_to_a(
+    a: np.ndarray, b: np.ndarray, size: int = None, seed: int = None
+) -> np.ndarray:
+    """Return indices of `b` that are distributed similarly to `a`.
+
+    Parameters
+    ----------
+    a : array
+        One-dimensional array of samples.
+    b : array
+        One-dimensional array of samples from which to sample.
+    size : int
+        Number of samples to take from `b`. Default is `len(a)`.
+
+    Returns
+    -------
+    Numpy array of indices with shape `(size,)`. If `size` is `None`, the shape is
+    `(len(a),)`.
+
+    Examples
+    --------
+    >>> a = np.array([1, 1, 2])
+    >>> b = np.array([0, 0, 1, 2, 3, 4, 1])
+    >>> mask = sample_b_matched_to_a(a, b, seed=42)
+    >>> mask
+    array([2, 6, 3])
+    >>> b[mask]
+    array([1, 1, 2])
+    """
+    a, b = np.asanyarray(a), np.asanyarray(b)
+    kde = scipy.stats.gaussian_kde(a)
+    p = kde(b)
+    p = p / p.sum()  # scale to sum to 1
+    if size is None:
+        size = a.shape[0]
+    if size > b.shape[0]:
+        raise ValueError("size is greater than length of data from which to sample")
+    idxs = np.arange(b.shape[0])
+    rng = np.random.RandomState(seed=seed)
+    return rng.choice(idxs, size=size, replace=False, p=p)
 
 
 class _ProcessingOutput(typing.NamedTuple):
