@@ -6,4 +6,7 @@ setup(
     description="Utilities for ChIP-seq analysis",
     author="Jakub Kaczmarzyk",
     py_modules=["chipseq_utils"],
+    python_requires=">=3.6,<4",
+    install_requires=["h5py", "matplotlib", "numpy", "pandas"],
+    extras_require={"dev": ["flake8", "mypy"]},
 )
