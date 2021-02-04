@@ -6,16 +6,80 @@
 #   apply that to negative data, and sample based on those probabilities.
 
 import gzip
+import http.client
 import io
+from os import PathLike
 from pathlib import Path
+import shutil
 import subprocess
 import typing
+import urllib.request
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 # Type that can represent a path on the filesystem.
 PathType = typing.Union[str, Path]
+
+
+def download(
+    url: typing.Union[str, urllib.request.Request], output_path: PathLike, force=False
+) -> http.client.HTTPResponse:
+    """Download a file from `url` and save to `output`.
+
+    Parameters
+    ----------
+    url : str or `urllib.request.Request`
+        URL from which to download.
+    output_path : Path-like
+        Path in which to save downloaded data.
+    force : bool
+        If `True`, overwrite output file if it exists.
+
+    Returns
+    -------
+    Instance of `http.client.HTTPResponse` (though it is closed).
+    """
+    output_path = Path(output_path)
+    if output_path.exists() and not force:
+        raise FileExistsError(
+            f"File exists: '{output_path}'. To overwrite, use `force=True`"
+        )
+    with urllib.request.urlopen(url=url) as response:
+        with output_path.open("wb") as f:
+            shutil.copyfileobj(response, f)
+        return response
+
+
+def add_str_before_suffixes(filepath: PathType, string: str) -> Path:
+    """Append a string to a filename immediately before extension(s).
+
+    Parameters
+    ----------
+    filepath : Path-like
+        Path to modify. Can contain multiple extensions like `.bed.gz`.
+    string : str
+        String to append to filename.
+
+    Returns
+    -------
+    Instance of `pathlib.Path`.
+
+    Examples
+    --------
+    >>> add_str_before_suffixes("foo", "_baz")
+    PosixPath('foo_baz')
+    >>> add_str_before_suffixes("foo.bed", "_baz")
+    PosixPath('foo_baz.bed')
+    >>> add_str_before_suffixes("foo.bed.gz", "_baz")
+    PosixPath('foo_baz.bed.gz')
+    """
+    filepath = Path(filepath)
+    suffix = "".join(filepath.suffixes)
+    orig_name = filepath.name.replace(suffix, "")
+    new_name = f"{orig_name}{string}{suffix}"
+    return filepath.with_name(new_name)
 
 
 def filter_bed_by_max_length(df: pd.DataFrame, max_length: int) -> pd.DataFrame:
@@ -112,13 +176,14 @@ def bedtools_getfasta(
     tab_delim=False,
     force_strandedness=False,
     full_header=False,
-    bedtools_exe: PathType = "bedtools"
+    bedtools_exe: PathType = "bedtools",
 ) -> subprocess.CompletedProcess:
     """Extract DNA sequences from a fasta file based on feature coordinates.
 
     Wrapper around `bedtools getfasta`. This function was made to
     work with bedtools version 2.27.1. It is not guaranteed to work
-    with other versions.
+    with other versions. It is not even guaranteed to work with version 2.27.1, but
+    it could and probably will.
 
     Parameters
     ----------
@@ -273,7 +338,7 @@ def one_hot(sequences, alphabet="ACGT") -> np.ndarray:
 
     Examples
     --------
-    >>> chipseq_utils.one_hot(["TGCA"], alphabet="ACGT")
+    >>> one_hot(["TGCA"], alphabet="ACGT")
     array([[[0., 0., 0., 1.],
             [0., 0., 1., 0.],
             [0., 1., 0., 0.],
@@ -293,6 +358,7 @@ def one_hot(sequences, alphabet="ACGT") -> np.ndarray:
     # Make an integer array from the string array.
     pre_onehot = np.zeros(s.shape, dtype=np.uint8)
     for i, letter in enumerate(alphabet):
+        # do nothing on 0 because array is initialized with zeros.
         if i:
             pre_onehot[s == letter] = i
 
@@ -301,7 +367,201 @@ def one_hot(sequences, alphabet="ACGT") -> np.ndarray:
     return np.eye(n_classes)[pre_onehot]
 
 
+def bedtools_intersect(
+    a: PathType,
+    b: PathType,
+    *,
+    output_bedfile: PathType,
+    write_a=False,
+    invert_match=False,
+    bedtools_exe: PathType = "bedtools",
+) -> subprocess.CompletedProcess:
+    """Report overlaps between two feature files.
+
+    This is an incomplete wrapper around `bedtools intersect` version 2.27.1.
+    The set of arguments here does not include all of the command-line arguments.
+
+    Parameters
+    ----------
+    a : Path-like
+        First feature file <bed/gff/vcf/bam>.
+    b : Path-like
+        Second feature file <bed/gff/vcf/bam>.
+    output_bedfile : Path-like
+        Name of output file. Can be compressed (`.bed.gz`).
+    write_a : bool
+        Write the original entry in `a` for each overlap.
+    write_b : bool
+        Write the original entry in `b` for each overlap.
+    invert_match : bool
+        Only report those entries in `a` that have no overlaps with `b`.
+    bedtools_exe : Path-like
+        The path to the `bedtools` executable. By default, uses `bedtools` in `$PATH`.
+
+    Returns
+    -------
+    Instance of `subprocess.CompletedProcess`.
+    """
+    args = [str(bedtools_exe), "intersect"]
+    if write_a:
+        args.append("-wa")
+    if invert_match:
+        args.append("-v")
+    args.extend(["-a", str(a), "-b", str(b)])
+
+    output_bedfile = Path(output_bedfile)
+    gzipped_output = output_bedfile.suffix == ".gz"
+    openfile = gzip.open if gzipped_output else io.open
+    try:
+        # We cannot write stdout directly to a gzip file.
+        # See https://stackoverflow.com/a/2853396/5666087
+        process = subprocess.run(
+            args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        if not process.stdout:
+            raise subprocess.SubprocessError("empty stdout, aborting.")
+        with openfile(output_bedfile, mode="wb") as f:  # type: ignore
+            f.write(process.stdout)
+        return process
+    except subprocess.CalledProcessError as e:
+        raise subprocess.SubprocessError(e.stderr.decode()) from e
+
+
 def _is_gzipped(filepath: PathType) -> bool:
     """Return `True` if the file is gzip-compressed."""
     with open(filepath, "rb") as f:
         return f.read(2) == b"\x1f\x8b"
+
+
+class _ProcessingOutput(typing.NamedTuple):
+    """Container for output of processing."""
+
+    # Path to the original BED file (before processing).
+    bed_file_original: Path
+    # Path to the BED file with filtered data.
+    bed_file_filtered: Path
+    # Path to image of peak lengths in BED file.
+    bed_file_peak_length_img: Path
+    # Path to reference genome (FASTA).
+    reference_genome_path: Path
+    # Path to FASTA file (converted from BED with help of reference genome).
+    fasta_file: Path
+    # Alphabet in sequences.
+    alphabet: str
+    # Nonsense letters.
+    nonsense_letters: str
+    # Boolean array indicating which sequences are nonsense.
+    nonsense_mask: np.ndarray
+    # Descriptions of each sequence. Same length in first dimension as one-hot array.
+    descriptions: np.ndarray
+    # One-hot representation of sequences.
+    one_hot: np.ndarray
+
+
+def _bed_to_fasta_to_onehot(
+    bed_file: PathType,
+    max_read_length: int,
+    new_read_length: int,
+    reference_genome_fasta: PathType,
+    alphabet="ACGT",
+    nonsense_letters="N",
+    bedtools_exe: PathType = "bedtools",
+) -> _ProcessingOutput:
+    """Convert a BED file to one-hot representation with processing in between.
+
+    This is a high-level function that uses several other functions within this module.
+
+    Order of operations:
+    1. visualize peaks (save output)
+    2. filter (save output)
+    3. convert filtered bedfile to fasta (with help of reference genome) (save output)
+    4. parse fasta
+    5. filter sequences with nonsense
+    6. one-hot encode
+
+    Parameters
+    ----------
+    bed_file : Path-like
+        Input BED file with ChIP-seq results.
+    max_read_length : int
+        Upper threshold of read length. Reads greater than this length are thrown out.
+    new_read_length : int
+        Length to which to transform reads.
+    reference_genome_fasta : Path-like
+        Path to FASTA file containing reference genome.
+    alphabet : str
+        Letters contained in sequences.
+    nonsense_letters : str
+        Characters that indicate nonsense.
+    bedtools_exe : Path-like
+        Path to the `bedtools` command-line program.
+
+    Returns
+    -------
+    Instance of `_ProcessingOutput` namedtuple.
+    """
+    print("reading data...")
+    df = pd.read_csv(bed_file, delimiter="\t", header=None)
+
+    # Visualize length of peaks.
+    # TODO: are columns 1 and 2 guaranteed to be start and stop?
+    print("getting peak length...")
+    lengths = df.loc[:, 2] - df.loc[:, 1]
+    plt.hist(lengths, bins=20)
+    plt.title("Distribution of peak length in ChIP-seq data")
+    bed_file_peak_length_img = add_str_before_suffixes(
+        bed_file, "peak_length"
+    ).with_suffix(".png")
+    plt.savefig(bed_file_peak_length_img)
+    plt.close()
+
+    # Filter.
+    print("filtering...")
+    df = filter_bed_by_max_length(df, max_length=max_read_length)
+    df = transform_bed_to_constant_size(df, new_length=new_read_length)
+    bed_file_filtered = add_str_before_suffixes(bed_file, string="_filtered")
+    df.to_csv(bed_file_filtered, sep="\t", index=False, header=False)
+    print(f"  saved to '{bed_file_filtered}'")
+
+    # Convert filtered bed file to fasta.
+    # TODO: replace variable name with more descriptiven name.
+    print("converting chip-seq data to fasta...")
+    chipseq_fasta = add_str_before_suffixes(
+        bed_file_filtered, "_extracted"
+    ).with_suffix(".fa")
+    _ = bedtools_getfasta(
+        input_fasta=reference_genome_fasta,
+        output_fasta=chipseq_fasta,
+        bed_file=bed_file_filtered,
+        force_strandedness=True,
+        bedtools_exe=bedtools_exe,
+    )
+    print(f"  saved to '{chipseq_fasta}'")
+
+    # Load sequences
+    print("loading fasta...")
+    descriptions, sequences = parse_fasta(chipseq_fasta)
+
+    # Filter out nonsense
+    print("filtering nonsense...")
+    nonsense = get_nonsense_sequence_mask(sequences, nonsense_letters=nonsense_letters)
+    print(f"  found {nonsense.sum()} sequences with nonsense letters")
+    descriptions = descriptions[~nonsense]
+    sequences = sequences[~nonsense]
+
+    # One-hot encode
+    print("one-hot encoding...")
+    onehot = one_hot(sequences, alphabet=alphabet)
+
+    return _ProcessingOutput(
+        bed_file_original=Path(bed_file),
+        bed_file_filtered=bed_file_filtered,
+        bed_file_peak_length_img=bed_file_peak_length_img,
+        reference_genome_path=Path(reference_genome_fasta),
+        fasta_file=chipseq_fasta,
+        alphabet=alphabet,
+        nonsense_letters=nonsense_letters,
+        nonsense_mask=nonsense,
+        descriptions=descriptions,
+        one_hot=onehot,
+    )
