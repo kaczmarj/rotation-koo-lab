@@ -644,7 +644,7 @@ def bed_to_fasta_to_one_hot(
     - positive_peaks_filtered.bed.gz
     - positive_peaks_filtered_extracted.bed.fa
     - positive_peakspeak_length.bed.png
-    - negative_peaks.bed.bgz
+    - negative_peaks.bed.gz
     - negative_peaks_nonintersect.bed.gz
     - negative_peaks_nonintersect_filtered.bed.gz
     - negative_peaks_nonintersect_filtered_extracted.bed.fa
