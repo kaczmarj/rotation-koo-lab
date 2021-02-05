@@ -1,10 +1,5 @@
 """Utilities for ChIP-seq analysis."""
 
-# TODO: figure out how to sample negative data to approximate the distribution of GC
-# content in the positive data.
-#   One idea is to get a probability function for the GC content in the positive data,
-#   apply that to negative data, and sample based on those probabilities.
-
 import gzip
 import http.client
 import io
