@@ -443,7 +443,7 @@ def sample_b_matched_to_a(
     b : array
         One-dimensional array of samples from which to sample.
     size : int
-        Number of samples to take from `b`. Default is `len(a)`.
+        Number of samples to take from `b`. Default is `min(len(a), len(b))`.
 
     Returns
     -------
@@ -480,13 +480,15 @@ def sample_b_matched_to_a(
         raise ValueError("`a` must be one-dimensional")
     if b.ndim != 1:
         raise ValueError("`b` must be one-dimensional")
+    if size is None:
+        size = min(a.shape[0], b.shape[0])
+    if size == b.shape[0]:
+        # Optimize -- return range of indices if we would sample all of `b` anyway.
+        return np.arange(b.shape[0])
     kde = scipy.stats.gaussian_kde(a)
     p = kde(b)
     p = p / p.sum()  # scale to sum to 1
-    if size is None:
-        size = a.shape[0]
-    if size > b.shape[0]:
-        raise ValueError("size is greater than length of data from which to sample")
+
     idxs = np.arange(b.shape[0])
     rng = np.random.RandomState(seed=seed)
     return rng.choice(idxs, size=size, replace=False, p=p)
@@ -659,7 +661,7 @@ def bed_to_fasta_to_one_hot(
     positive_bed_url : str
         URL to BED file of positive reads (i.e., ChIP-seq data).
     negative_bed_url : str
-        URL to BED file of negative reads (i.e., DNA-seq data).
+        URL to BED file of negative reads (i.e., DNase-seq data).
     reference_genome_fasta : Path-like
         Path to reference genome file (FASTA format).
     max_read_length : int
