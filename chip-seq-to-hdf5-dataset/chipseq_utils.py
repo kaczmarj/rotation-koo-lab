@@ -464,8 +464,27 @@ def sample_b_matched_to_a(
     array([2, 6, 3])
     >>> b[mask]
     array([1, 1, 2])
+
+    In the following example, two normal distributions are made. Despite the second
+    distribution being bimodal, this function draws samples that are most similar to the
+    first distribution.
+
+    >>> rng = np.random.RandomState(seed=42)
+    >>> x = rng.normal(size=1000)
+    >>> y = np.concatenate((rng.normal(size=1000), rng.normal(loc=5, size=1000)))
+    >>> _ = plt.hist(x, bins=25, range=(-3, 8))
+    >>> plt.show()
+    >>> _ = plt.hist(y, bins=25, range=(-3, 8))
+    >>> plt.show()
+    >>> mask = sample_b_matched_to_a(x, y, seed=42)
+    >>> _ = plt.hist(y[mask], bins=25, range=(-3, 8))
+    >>> plt.show()
     """
     a, b = np.asanyarray(a), np.asanyarray(b)
+    if a.ndim != 1:
+        raise ValueError("`a` must be one-dimensional")
+    if b.ndim != 1:
+        raise ValueError("`b` must be one-dimensional")
     kde = scipy.stats.gaussian_kde(a)
     p = kde(b)
     p = p / p.sum()  # scale to sum to 1
