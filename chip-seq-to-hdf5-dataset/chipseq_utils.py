@@ -569,7 +569,7 @@ def _bed_to_fasta_to_onehot(
     plt.hist(lengths, bins=20)
     plt.title("Distribution of peak length in ChIP-seq data")
     bed_file_peak_length_img = add_str_before_suffixes(
-        bed_file, "peak_length"
+        bed_file, "_peak_length"
     ).with_suffix(".png")
     plt.savefig(bed_file_peak_length_img)
     plt.close()
@@ -624,3 +624,118 @@ def _bed_to_fasta_to_onehot(
         descriptions=descriptions,
         one_hot=onehot,
     )
+
+
+def bed_to_fasta_to_one_hot(
+    dataset_dir: PathType,
+    positive_bed_url: str,
+    negative_bed_url: str,
+    reference_genome_fasta: PathType,
+    max_read_length: int,
+    new_read_length: int,
+    alphabet="ACGT",
+    nonsense_letters="N",
+    bedtools_exe: PathType = "bedtools",
+) -> typing.Tuple[_ProcessingOutput, _ProcessingOutput]:
+    """Workflow that goes from BED files to one-hot representations.
+
+    This function creates several files in `dataset_dir` as part of the workflow:
+    - positive_peaks.bed.gz
+    - positive_peaks_filtered.bed.gz
+    - positive_peaks_filtered_extracted.bed.fa
+    - positive_peakspeak_length.bed.png
+    - negative_peaks.bed.bgz
+    - negative_peaks_nonintersect.bed.gz
+    - negative_peaks_nonintersect_filtered.bed.gz
+    - negative_peaks_nonintersect_filtered_extracted.bed.fa
+    - negative_peaks_nonintersectpeak_length.bed.png
+
+    This is a high-level function that uses several methods in this module.
+
+    Parameters
+    ----------
+    dataset_dir : Path-like
+        Directory in which to save outputs.
+    positive_bed_url : str
+        URL to BED file of positive reads (i.e., ChIP-seq data).
+    negative_bed_url : str
+        URL to BED file of negative reads (i.e., DNA-seq data).
+    reference_genome_fasta : Path-like
+        Path to reference genome file (FASTA format).
+    max_read_length : int
+        Upper threshold of read length. Reads greater than this length are thrown out.
+    new_read_length : int
+        Length to which to transform reads.
+    reference_genome_fasta : Path-like
+        Path to FASTA file containing reference genome.
+    alphabet : str
+        Letters contained in sequences.
+    nonsense_letters : str
+        Characters that indicate nonsense.
+    bedtools_exe : Path-like
+        Path to the `bedtools` command-line program.
+
+    Returns
+    -------
+    Tuple of two instances of `_ProcessingOutput`. The first contains output of the
+    positive reads, and the second contains output of the negative reads.
+    """
+
+    dataset_dir = Path(dataset_dir)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    # Positive
+    positive_bed = dataset_dir / "positive_peaks.bed.gz"
+    if not positive_bed.exists():
+        print("downloading...")
+        _ = download(
+            url=positive_bed_url,
+            output_path=positive_bed,
+            force=True,
+        )
+    else:
+        print("skipping download step...")
+
+    positive_output = _bed_to_fasta_to_onehot(
+        bed_file=positive_bed,
+        max_read_length=max_read_length,
+        new_read_length=new_read_length,
+        reference_genome_fasta=reference_genome_fasta,
+        alphabet=alphabet,
+        nonsense_letters=nonsense_letters,
+        bedtools_exe=bedtools_exe,
+    )
+    del positive_bed
+
+    # Negative.
+    negative_bed = dataset_dir / "negative_peaks.bed.gz"
+    if not negative_bed.exists():
+        print("downloading...")
+        _ = download(
+            url=negative_bed_url,
+            output_path=negative_bed,
+            force=True,
+        )
+    else:
+        print("skipping download step...")
+
+    negative_bed_nonintersect = add_str_before_suffixes(negative_bed, "_nonintersect")
+    _ = bedtools_intersect(
+        a=negative_bed,
+        b=positive_output.bed_file_filtered,
+        output_bedfile=negative_bed_nonintersect,
+        write_a=True,
+        invert_match=True,
+    )
+
+    negative_output = _bed_to_fasta_to_onehot(
+        bed_file=negative_bed_nonintersect,
+        max_read_length=max_read_length,
+        new_read_length=new_read_length,
+        reference_genome_fasta=reference_genome_fasta,
+        alphabet=alphabet,
+        nonsense_letters=nonsense_letters,
+        bedtools_exe=bedtools_exe,
+    )
+
+    return positive_output, negative_output
