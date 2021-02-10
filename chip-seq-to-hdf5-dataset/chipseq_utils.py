@@ -741,3 +741,53 @@ def bed_to_fasta_to_one_hot(
     )
 
     return positive_output, negative_output
+
+
+def get_splits(n_samples, splits, shuffle=True, seed=None):
+    """Returns indices that can be used to subset data, for example into
+    training and testing sets.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples in the dataset. Must be greater than zero.
+    splits : list of floats
+        Ratios in which to split data. Must sum to one.
+    shuffle : bool
+        Whether or not to shuffle the indices.
+    seed : int, float
+        Number with which to seed random number generator.
+
+    Returns
+    -------
+    Arrays of indices that can be used to subset data. The number of
+    arrays returned is equal to the length of `splits`.
+
+    Examples
+    --------
+    >>> x = np.arange(5)
+    >>> train, test = get_splits(x.shape[0], [0.4, 0.6], seed=42)
+    >>> x[train]
+    array([1, 4])
+    >>> x[test]
+    array([2, 0, 3])
+    """
+    if n_samples < 1:
+        raise ValueError("`n_samples` must be > 0.")
+    if len(splits) < 2:
+        raise ValueError("splits must have length > 1")
+    if sum(splits) != 1:
+        raise ValueError("sum of `splits` must equal 1.")
+
+    if shuffle:
+        rng = np.random.RandomState(seed=seed)
+        idxs = rng.permutation(n_samples)
+    else:
+        idxs = np.arange(n_samples)
+
+    # Remove last value because it will be 1.0 and including it will return
+    # `len(splits) + 1` arrays instead of `len(splits)`.
+    q = np.quantile(idxs, np.cumsum(splits)[:-1])
+    # Cast to int so can be used as index.
+    q = np.ceil(q).astype(np.int64)
+    return np.split(idxs, q)
